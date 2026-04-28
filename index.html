@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RSRC Board Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="css/main.css">
+  <style>
+    .hero {
+      position: relative;
+      min-height: 480px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-image: url('img/Clubhouse.JPEG');
+      background-size: cover;
+      background-position: center top;
+    }
+    .hero-overlay {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.65) 0%, rgba(0,0,0,0.48) 100%);
+    }
+    .hero-content {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      padding: 64px 24px 56px;
+      width: 100%;
+      max-width: 860px;
+      margin: 0 auto;
+    }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 13px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.22);
+      border-radius: 100px;
+      font-size: 10.5px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.85);
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      margin-bottom: 22px;
+      backdrop-filter: blur(4px);
+    }
+    .hero h1 {
+      font-family: 'DM Sans', sans-serif;
+      font-size: clamp(30px, 5vw, 50px);
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -.04em;
+      line-height: 1.1;
+      margin-bottom: 14px;
+      text-shadow: 0 2px 16px rgba(0,0,0,0.35);
+    }
+    .hero p {
+      font-size: 16px;
+      color: rgba(255,255,255,0.68);
+      max-width: 400px;
+      margin: 0 auto;
+      line-height: 1.65;
+    }
+
+    /* Cards section */
+    .cards-section {
+      background: #f0efeb;
+      padding: 44px 24px 52px;
+    }
+    .nav-cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      max-width: 680px;
+      margin: 0 auto 44px;
+    }
+    @media (max-width: 580px) { .nav-cards { grid-template-columns: 1fr; } }
+
+    .nav-card {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 20px;
+      background: #fff;
+      border: 1px solid #e2e1dd;
+      border-radius: 10px;
+      text-decoration: none;
+      box-shadow: 0 1px 3px rgba(0,0,0,.05);
+      transition: all .18s ease;
+    }
+    .nav-card:hover {
+      border-color: #2a5c23;
+      box-shadow: 0 4px 16px rgba(42,92,35,.1);
+      transform: translateY(-2px);
+    }
+    .nav-card:hover .card-icon { background: #edf5eb; border-color: #c5dfc2; }
+    .nav-card:hover .card-icon svg { color: #2a5c23; }
+    .nav-card:hover .card-arrow { opacity: 1; color: #2a5c23; }
+
+    .card-icon {
+      width: 38px; height: 38px;
+      background: #f7f6f2; border: 1px solid #e2e1dd;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      transition: all .18s;
+    }
+    .card-icon svg { width: 17px; height: 17px; color: #666; transition: color .18s; }
+    .card-label { font-family: 'DM Sans', sans-serif; font-weight: 700; font-size: 15px; color: #111; }
+    .card-sub   { font-size: 12px; color: #999; margin-top: 2px; }
+    .card-arrow { font-size: 12px; font-weight: 600; color: #ccc; margin-top: auto; opacity: 0; transition: all .18s; }
+
+    /* Members */
+    .members-label {
+      font-size: 10.5px; font-weight: 700;
+      letter-spacing: .12em; text-transform: uppercase;
+      color: #bbb; text-align: center; margin-bottom: 16px;
+    }
+    .members-grid {
+      display: flex; flex-wrap: wrap;
+      justify-content: center; gap: 10px;
+      max-width: 680px; margin: 0 auto;
+    }
+    .member-card {
+      display: flex; flex-direction: column; align-items: center; gap: 9px;
+      padding: 16px 18px;
+      background: #fff; border: 1px solid #e2e1dd; border-radius: 10px;
+      min-width: 105px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.04);
+      transition: all .18s;
+    }
+    .member-card:hover { border-color: #d0cfc9; box-shadow: 0 4px 12px rgba(0,0,0,.08); transform: translateY(-1px); }
+    .member-avatar {
+      width: 44px; height: 44px; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'DM Sans', sans-serif; font-weight: 800; font-size: 17px; color: #fff;
+    }
+    .member-name { font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 700; color: #111; }
+    .member-role { font-size: 11px; color: #999; text-align: center; line-height: 1.4; }
+    .av-boris  { background: #8b3535; }
+    .av-sjef   { background: #2a4a6e; }
+    .av-oliver { background: #2a5c23; }
+    .av-ewan   { background: #4a3570; }
+    .av-casper { background: #7a5220; }
+  </style>
+</head>
+<body>
+  <header id="app-nav" class="sticky top-0 z-50"></header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-overlay"></div>
+      <div class="hero-content">
+        <div class="hero-badge">
+          <span class="live-dot" style="width:6px;height:6px;border-radius:50%;background:#ef4444;display:inline-block"></span>
+          Board Internal Dashboard
+        </div>
+        <h1>Rotterdam Student<br>Rugby Club</h1>
+        <p>One place for the board to coordinate events, track tasks, and hit season goals.</p>
+      </div>
+    </section>
+
+    <div class="cards-section">
+      <div class="nav-cards">
+        <a href="calendar.html" class="nav-card">
+          <div class="card-icon">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          </div>
+          <div>
+            <div class="card-label">Calendar</div>
+            <div class="card-sub">Matches, trainings & events</div>
+          </div>
+          <div class="card-arrow">Open →</div>
+        </a>
+        <a href="todos.html" class="nav-card">
+          <div class="card-icon">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+          </div>
+          <div>
+            <div class="card-label">To Do</div>
+            <div class="card-sub">Board task management</div>
+          </div>
+          <div class="card-arrow">Open →</div>
+        </a>
+        <a href="goals.html" class="nav-card">
+          <div class="card-icon">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          </div>
+          <div>
+            <div class="card-label">Goals</div>
+            <div class="card-sub">Season objectives & progress</div>
+          </div>
+          <div class="card-arrow">Open →</div>
+        </a>
+      </div>
+
+      <div class="members-label">61st Board 2026-2027</div>
+      <div class="members-grid" id="member-list"></div>
+    </div>
+  </main>
+
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+  <script src="js/firebase-config.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    initApp('home');
+    const avatarClass = { boris:'av-boris', sjef:'av-sjef', oliver:'av-oliver', ewan:'av-ewan', casper:'av-casper' };
+    const memberList  = document.getElementById('member-list');
+    Object.entries(MEMBERS).filter(([k]) => k !== 'master').forEach(([key, m]) => {
+      memberList.innerHTML += `
+        <div class="member-card">
+          <div class="member-avatar ${avatarClass[key] || ''}">${m.name[0]}</div>
+          <div>
+            <div class="member-name">${m.name}</div>
+            <div class="member-role">${m.role}</div>
+          </div>
+        </div>`;
+    });
+  </script>
+</body>
+</html>
