@@ -189,14 +189,15 @@ function injectNav(activePage) {
     { page: 'calendar', href: 'calendar.html', label: 'Calendar' },
     { page: 'todos',    href: 'todos.html',    label: 'To Do' },
     { page: 'goals',    href: 'goals.html',    label: 'Goals' },
+    { page: 'docs',     href: 'https://drive.google.com/drive/folders/1NUJ9doeGd2wctHIDreJeYYNK2roE2tmO?usp=drive_link', label: 'Documents' },
   ];
 
   const desktopLinks = links.map(l =>
-    `<a href="${l.href}" class="${l.page === activePage ? 'nav-active' : 'nav-link'}">${l.label}</a>`
+    `<a href="${l.href}" ${l.page === 'docs' ? 'target="_blank"' : ''} class="${l.page === activePage ? 'nav-active' : 'nav-link'}">${l.label}</a>`
   ).join('');
 
   const mobileLinks = links.map(l =>
-    `<a href="${l.href}" class="${l.page === activePage ? 'mobile-nav-active' : 'mobile-nav-link'}">${l.label}</a>`
+    `<a href="${l.href}" ${l.page === 'docs' ? 'target="_blank"' : ''} class="${l.page === activePage ? 'mobile-nav-active' : 'mobile-nav-link'}">${l.label}</a>`
   ).join('');
 
   const userEl = m
