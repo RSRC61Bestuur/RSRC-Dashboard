@@ -1,6 +1,7 @@
 // ─── RSRC Dashboard — Calendar Page ─────────────────────────────────────────
 
 let currentYear, currentMonth, allEvents = {}, activeFilter = 'all';
+let editingEventId = null; // track if we're editing an existing event
 
 function closeModal(id) {
   document.getElementById(id)?.classList.add('hidden');
@@ -80,14 +81,26 @@ function renderCalendar() {
     if (events.length) {
       const dots = document.createElement('div');
       dots.className = 'event-dots';
+
       events.slice(0, 3).forEach(ev => {
         const m = MEMBERS[ev.owner] || MEMBERS.master;
-        dots.innerHTML += `
-          <div class="event-dot">
-            <span class="event-dot-indicator" style="background:${m.color}"></span>
-            <span class="event-dot-label">${ev.title}</span>
-          </div>`;
+
+        if (ev.allDay) {
+          // Full-day event: colored bar spanning full width
+          dots.innerHTML += `
+            <div class="event-bar" style="background:${m.color}">
+              <span class="event-bar-label">${ev.title}</span>
+            </div>`;
+        } else {
+          // Regular event: dot + label
+          dots.innerHTML += `
+            <div class="event-dot">
+              <span class="event-dot-indicator" style="background:${m.color}"></span>
+              <span class="event-dot-label">${ev.title}</span>
+            </div>`;
+        }
       });
+
       if (events.length > 3) {
         dots.innerHTML += `<div class="event-dot"><span class="event-dot-label" style="color:#bbb">+${events.length - 3} more</span></div>`;
       }
@@ -127,11 +140,12 @@ function renderUpcoming() {
 
   list.innerHTML = upcoming.slice(0, 6).map(ev => {
     const m = MEMBERS[ev.owner] || MEMBERS.master;
+    const allDayLabel = ev.allDay ? '<span style="font-size:11px;background:#edf5eb;color:#2a5c23;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px">All day</span>' : '';
     return `
       <div class="upcoming-card">
         <div style="width:3px;border-radius:2px;background:${m.color};align-self:stretch;flex-shrink:0"></div>
         <div style="flex:1;min-width:0">
-          <div class="upcoming-title">${ev.title}</div>
+          <div class="upcoming-title">${ev.title}${allDayLabel}</div>
           <div class="upcoming-meta">${formatDate(ev.dateKey)}${ev.startTime ? ' · ' + ev.startTime : ''}${ev.location ? ' · ' + ev.location : ''}</div>
         </div>
         ${memberAvatar(ev.owner || 'master', 7)}
@@ -154,18 +168,27 @@ function openDayModal(dateKey, day, month) {
   } else {
     list.innerHTML = events.map(ev => {
       const m = MEMBERS[ev.owner] || MEMBERS.master;
+      const allDayTag = ev.allDay ? '<span style="font-size:11px;background:#edf5eb;color:#2a5c23;padding:1px 6px;border-radius:3px;font-weight:600">All day</span>' : '';
       return `
         <div class="day-event-row">
           <div style="width:3px;border-radius:2px;background:${m.color};align-self:stretch;flex-shrink:0"></div>
           <div style="flex:1;min-width:0">
-            <div class="day-event-title">${ev.title}</div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span class="day-event-title">${ev.title}</span>
+              ${allDayTag}
+            </div>
             ${ev.startTime ? `<div class="day-event-meta">${ev.startTime}${ev.endTime ? ' – ' + ev.endTime : ''}</div>` : ''}
             ${ev.location ? `<div class="day-event-meta">${ev.location}</div>` : ''}
             ${ev.description ? `<div class="day-event-meta" style="margin-top:4px">${ev.description}</div>` : ''}
           </div>
-          <button class="delete-btn" onclick="deleteEvent('${ev.id}')">
-            <svg style="width:15px;height:15px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-          </button>
+          <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">
+            <button class="edit-btn" onclick="closeModal('day-modal');openEditEventModal('${ev.id}')" title="Edit">
+              <svg style="width:15px;height:15px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+            </button>
+            <button class="delete-btn" onclick="deleteEvent('${ev.id}')">
+              <svg style="width:15px;height:15px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            </button>
+          </div>
         </div>`;
     }).join('');
   }
@@ -181,12 +204,16 @@ function openDayModal(dateKey, day, month) {
 // ── Create event modal ────────────────────────────────────────────────────
 
 function openCreateEventModal(dateKey) {
+  editingEventId = null;
+  document.getElementById('event-modal-title').textContent = 'New Event';
   document.getElementById('ev-title').value    = '';
   document.getElementById('ev-date').value     = dateKey || todayStr();
   document.getElementById('ev-start').value    = '';
   document.getElementById('ev-end').value      = '';
   document.getElementById('ev-location').value = '';
   document.getElementById('ev-desc').value     = '';
+  document.getElementById('ev-allday').checked = false;
+  toggleAllDay();
 
   const ownerSel = document.getElementById('ev-owner');
   ownerSel.innerHTML = '<option value="">— Select member —</option>';
@@ -199,26 +226,79 @@ function openCreateEventModal(dateKey) {
   document.getElementById('event-modal').classList.remove('hidden');
 }
 
+// ── Edit event modal ──────────────────────────────────────────────────────
+
+function openEditEventModal(eventId) {
+  // Find the event in allEvents
+  let ev = null;
+  Object.values(allEvents).forEach(evs => {
+    const found = evs.find(e => e.id === eventId);
+    if (found) ev = found;
+  });
+  if (!ev) return;
+
+  editingEventId = eventId;
+  document.getElementById('event-modal-title').textContent = 'Edit Event';
+  document.getElementById('ev-title').value    = ev.title || '';
+  document.getElementById('ev-date').value     = ev.date  || '';
+  document.getElementById('ev-start').value    = ev.startTime || '';
+  document.getElementById('ev-end').value      = ev.endTime   || '';
+  document.getElementById('ev-location').value = ev.location  || '';
+  document.getElementById('ev-desc').value     = ev.description || '';
+  document.getElementById('ev-allday').checked = ev.allDay || false;
+  toggleAllDay();
+
+  const ownerSel = document.getElementById('ev-owner');
+  ownerSel.innerHTML = '<option value="">— Select member —</option>';
+  Object.entries(MEMBERS).forEach(([key, m]) => {
+    ownerSel.innerHTML += `<option value="${key}">${m.name} — ${m.role}</option>`;
+  });
+  ownerSel.value = ev.owner || '';
+
+  document.getElementById('event-modal').classList.remove('hidden');
+}
+
+// ── Toggle all-day (hide/show time fields) ────────────────────────────────
+
+function toggleAllDay() {
+  const isAllDay = document.getElementById('ev-allday').checked;
+  document.getElementById('ev-time-fields').style.display = isAllDay ? 'none' : 'grid';
+}
+
+// ── Save event (create or update) ─────────────────────────────────────────
+
 function saveEvent() {
   const title = document.getElementById('ev-title').value.trim();
   const date  = document.getElementById('ev-date').value;
   if (!title || !date) { showToast('Title and date are required.', 'error'); return; }
 
-  const event = {
+  const allDay = document.getElementById('ev-allday').checked;
+
+  const eventData = {
     title,
     date,
-    startTime:   document.getElementById('ev-start').value    || null,
-    endTime:     document.getElementById('ev-end').value      || null,
+    allDay: allDay,
+    startTime:   allDay ? null : (document.getElementById('ev-start').value || null),
+    endTime:     allDay ? null : (document.getElementById('ev-end').value   || null),
     location:    document.getElementById('ev-location').value.trim() || null,
     description: document.getElementById('ev-desc').value.trim()     || null,
-    owner:       document.getElementById('ev-owner').value    || 'master',
-    createdAt:   firebase.firestore.FieldValue.serverTimestamp(),
+    owner:       document.getElementById('ev-owner').value           || 'master',
   };
 
-  db.collection('events').add(event).then(() => {
-    closeModal('event-modal');
-    showToast('Event saved!');
-  }).catch(() => showToast('Failed to save event.', 'error'));
+  if (editingEventId) {
+    // Update existing
+    db.collection('events').doc(editingEventId).update(eventData).then(() => {
+      closeModal('event-modal');
+      showToast('Event updated!');
+    }).catch(() => showToast('Failed to update event.', 'error'));
+  } else {
+    // Create new
+    eventData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+    db.collection('events').add(eventData).then(() => {
+      closeModal('event-modal');
+      showToast('Event saved!');
+    }).catch(() => showToast('Failed to save event.', 'error'));
+  }
 }
 
 function deleteEvent(id) {

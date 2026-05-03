@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Roles — RSRC Board</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="css/main.css">
+  <style>
+    .page-wrap { max-width: 900px; margin: 0 auto; padding: 32px 24px; }
+
+    .page-header-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 28px 0 24px; border-bottom: 1px solid #e2e1dd; margin-bottom: 36px; }
+    .page-title { font-family: 'DM Sans', sans-serif; font-size: 22px; font-weight: 800; color: #111; letter-spacing: -.03em; }
+    .page-sub   { font-size: 12.5px; color: #999; margin-top: 3px; }
+
+    /* Member section card */
+    .member-section {
+      background: #fff;
+      border: 1px solid #e2e1dd;
+      border-radius: 10px;
+      margin-bottom: 16px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,.04);
+    }
+
+    .member-section-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 18px 20px;
+      border-bottom: 1px solid #f0efeb;
+      cursor: pointer;
+      user-select: none;
+      transition: background .15s;
+    }
+    .member-section-header:hover { background: #faf9f6; }
+
+    .member-av {
+      width: 38px; height: 38px;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 800; font-size: 16px; color: #fff;
+      flex-shrink: 0;
+    }
+    .member-info { flex: 1; }
+    .member-hname { font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 700; color: #111; }
+    .member-hrole { font-size: 12px; color: #999; margin-top: 1px; }
+    .chevron { color: #bbb; transition: transform .2s; }
+    .chevron.open { transform: rotate(90deg); }
+
+    /* Section body */
+    .member-section-body { padding: 20px; display: none; }
+    .member-section-body.open { display: block; }
+
+    /* Two columns: weekly tasks + ad-hoc roles */
+    .roles-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+    @media (max-width: 600px) { .roles-grid { grid-template-columns: 1fr; } }
+
+    .roles-col-label {
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: #bbb;
+      margin-bottom: 12px;
+    }
+
+    /* Item list */
+    .role-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 7px 0;
+      border-bottom: 1px solid #f5f4f0;
+      group: true;
+    }
+    .role-item:last-child { border-bottom: none; }
+
+    .role-bullet {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: #ccc;
+      flex-shrink: 0;
+      margin-top: 6px;
+    }
+
+    .role-text {
+      flex: 1;
+      font-size: 13.5px;
+      color: #333;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+
+    .role-del-btn {
+      background: none; border: none; cursor: pointer;
+      color: #ddd; transition: color .15s; padding: 2px;
+      flex-shrink: 0; opacity: 0;
+      display: flex; align-items: center;
+    }
+    .role-item:hover .role-del-btn { opacity: 1; }
+    .role-del-btn:hover { color: #b81c1c; }
+
+    /* Add input row */
+    .add-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .add-input {
+      flex: 1;
+      padding: 7px 10px;
+      border: 1px solid #e2e1dd;
+      border-radius: 5px;
+      font-size: 13px;
+      color: #111;
+      outline: none;
+      font-family: inherit;
+      background: #f7f6f2;
+      transition: border-color .15s, background .15s;
+    }
+    .add-input:focus { border-color: #2a5c23; background: #fff; }
+    .add-input::placeholder { color: #bbb; }
+
+    .add-btn-sm {
+      padding: 7px 14px;
+      background: #2a5c23; color: #fff;
+      border: none; border-radius: 5px;
+      font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: all .15s;
+      font-family: inherit; white-space: nowrap;
+    }
+    .add-btn-sm:hover { background: #3a7a30; }
+
+    .empty-msg { font-size: 13px; color: #ccc; padding: 4px 0; }
+  </style>
+</head>
+<body style="min-height:100vh;display:flex;flex-direction:column;background:#f0efeb">
+  <header id="app-nav" class="sticky top-0 z-50"></header>
+
+  <main class="flex-1">
+    <div class="page-wrap">
+
+      <div class="page-header-bar">
+        <div>
+          <div class="page-title">Roles & Expectations</div>
+          <div class="page-sub">What each board member does — weekly tasks and ongoing responsibilities</div>
+        </div>
+      </div>
+
+      <div id="roles-container"></div>
+
+    </div>
+  </main>
+
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+  <script src="js/firebase-config.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    initApp('roles');
+
+    const avatarColors = {
+      boris: '#8b3535', sjef: '#2a4a6e', oliver: '#2a5c23',
+      ewan: '#4a3570', casper: '#7a5220'
+    };
+
+    // ── Firestore: load all roles ───────────────────────────────────────
+    let rolesData = {}; // { memberKey: { weekly: [...], adhoc: [...] } }
+
+    db.collection('roles').onSnapshot(snapshot => {
+      rolesData = {};
+      snapshot.forEach(doc => {
+        rolesData[doc.id] = doc.data();
+      });
+      renderAll();
+    });
+
+    // ── Render all member sections ──────────────────────────────────────
+    function renderAll() {
+      const container = document.getElementById('roles-container');
+      const members = Object.entries(MEMBERS).filter(([k]) => k !== 'master');
+
+      container.innerHTML = members.map(([key, m]) => {
+        const data = rolesData[key] || { weekly: [], adhoc: [] };
+        const weekly = data.weekly || [];
+        const adhoc  = data.adhoc  || [];
+        const color  = avatarColors[key] || '#555';
+
+        return `
+          <div class="member-section" id="section-${key}">
+            <div class="member-section-header" onclick="toggleSection('${key}')">
+              <div class="member-av" style="background:${color}">${m.name[0]}</div>
+              <div class="member-info">
+                <div class="member-hname">${m.name}</div>
+                <div class="member-hrole">${m.role}</div>
+              </div>
+              <svg class="chevron" id="chevron-${key}" style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+              </svg>
+            </div>
+
+            <div class="member-section-body" id="body-${key}">
+              <div class="roles-grid">
+
+                <!-- Weekly tasks -->
+                <div>
+                  <div class="roles-col-label">Weekly Tasks</div>
+                  <div id="weekly-list-${key}">
+                    ${weekly.length
+                      ? weekly.map((item, idx) => renderItem(key, 'weekly', item, idx)).join('')
+                      : '<div class="empty-msg">No weekly tasks yet</div>'
+                    }
+                  </div>
+                  <div class="add-row">
+                    <input class="add-input" id="weekly-input-${key}" placeholder="Add weekly task…" onkeydown="if(event.key==='Enter') addItem('${key}','weekly')">
+                    <button class="add-btn-sm" onclick="addItem('${key}','weekly')">Add</button>
+                  </div>
+                </div>
+
+                <!-- Ad-hoc roles -->
+                <div>
+                  <div class="roles-col-label">Roles & Responsibilities</div>
+                  <div id="adhoc-list-${key}">
+                    ${adhoc.length
+                      ? adhoc.map((item, idx) => renderItem(key, 'adhoc', item, idx)).join('')
+                      : '<div class="empty-msg">No roles added yet</div>'
+                    }
+                  </div>
+                  <div class="add-row">
+                    <input class="add-input" id="adhoc-input-${key}" placeholder="Add role or responsibility…" onkeydown="if(event.key==='Enter') addItem('${key}','adhoc')">
+                    <button class="add-btn-sm" onclick="addItem('${key}','adhoc')">Add</button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    function renderItem(memberKey, type, text, idx) {
+      return `
+        <div class="role-item">
+          <div class="role-bullet"></div>
+          <div class="role-text">${text}</div>
+          <button class="role-del-btn" onclick="deleteItem('${memberKey}','${type}',${idx})">
+            <svg style="width:13px;height:13px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>`;
+    }
+
+    // ── Toggle section open/close ───────────────────────────────────────
+    function toggleSection(key) {
+      const body    = document.getElementById(`body-${key}`);
+      const chevron = document.getElementById(`chevron-${key}`);
+      body.classList.toggle('open');
+      chevron.classList.toggle('open');
+    }
+
+    // ── Add item ────────────────────────────────────────────────────────
+    function addItem(memberKey, type) {
+      const input = document.getElementById(`${type}-input-${memberKey}`);
+      const text  = input.value.trim();
+      if (!text) return;
+
+      const current = rolesData[memberKey] || { weekly: [], adhoc: [] };
+      const updated = {
+        weekly: [...(current.weekly || [])],
+        adhoc:  [...(current.adhoc  || [])],
+      };
+      updated[type].push(text);
+
+      db.collection('roles').doc(memberKey).set(updated).then(() => {
+        input.value = '';
+        showToast('Added!');
+      }).catch(() => showToast('Failed to add.', 'error'));
+    }
+
+    // ── Delete item ─────────────────────────────────────────────────────
+    function deleteItem(memberKey, type, idx) {
+      const current = rolesData[memberKey] || { weekly: [], adhoc: [] };
+      const updated = {
+        weekly: [...(current.weekly || [])],
+        adhoc:  [...(current.adhoc  || [])],
+      };
+      updated[type].splice(idx, 1);
+
+      db.collection('roles').doc(memberKey).set(updated)
+        .catch(() => showToast('Failed to delete.', 'error'));
+    }
+  </script>
+</body>
+</html>

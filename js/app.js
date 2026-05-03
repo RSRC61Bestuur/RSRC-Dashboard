@@ -5,7 +5,7 @@ const MEMBERS = {
   sjef:   { name: 'Sjef',   role: 'Wedstrijd Sec.',        color: '#2a4a6e', colorLight: '#eef4ff' },
   oliver: { name: 'Oliver', role: 'Treasurer',             color: '#2a5c23', colorLight: '#edfff4' },
   ewan:   { name: 'Ewan',   role: 'Secretary',             color: '#4a3570', colorLight: '#f5f0ff' },
-  casper: { name: 'Casper', role: 'Commissaris bedrijf',   color: '#7a5220', colorLight: '#fffbea' },
+  casper: { name: 'Casper', role: 'Clubhuis Bestuurder',   color: '#7a5220', colorLight: '#fffbea' },
   master: { name: 'All',    role: 'All Members',           color: '#555555', colorLight: '#f5f4f0' },
 };
 
@@ -189,6 +189,7 @@ function injectNav(activePage) {
     { page: 'calendar', href: 'calendar.html', label: 'Calendar' },
     { page: 'todos',    href: 'todos.html',    label: 'To Do' },
     { page: 'goals',    href: 'goals.html',    label: 'Goals' },
+    { page: 'roles',    href: 'roles.html',    label: 'Roles' },
     { page: 'docs',     href: 'https://drive.google.com/drive/folders/1NUJ9doeGd2wctHIDreJeYYNK2roE2tmO?usp=drive_link', label: 'Documents' },
   ];
 
