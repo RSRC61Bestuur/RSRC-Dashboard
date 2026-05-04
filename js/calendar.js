@@ -1,7 +1,13 @@
 // ─── RSRC Dashboard — Calendar Page ─────────────────────────────────────────
 
 let currentYear, currentMonth, allEvents = {}, activeFilter = 'all';
-let editingEventId = null; // track if we're editing an existing event
+let editingEventId = null;
+let googleEvents = []; // events pulled from Google Calendar
+let gisInited = false, gapiInited = false;
+let tokenClient;
+
+const GAPI_CLIENT_ID = '168392677616-hac8fi72088cp6drtf4l2sdeo42nv1d9.apps.googleusercontent.com';
+const GCAL_SCOPE     = 'https://www.googleapis.com/auth/calendar.readonly';
 
 function closeModal(id) {
   document.getElementById(id)?.classList.add('hidden');
@@ -20,6 +26,127 @@ function loadEvents() {
     renderCalendar();
     renderUpcoming();
   });
+}
+
+// ── Google Calendar init ──────────────────────────────────────────────────
+
+function gapiLoaded() {
+  gapi.load('client', async () => {
+    await gapi.client.init({
+      discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'],
+    });
+    gapiInited = true;
+    maybeEnableGoogleBtn();
+  });
+}
+
+function gisLoaded() {
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: GAPI_CLIENT_ID,
+    scope: GCAL_SCOPE,
+    callback: async (resp) => {
+      if (resp.error) { showToast('Google auth failed.', 'error'); return; }
+      await fetchGoogleEvents();
+      updateGoogleBtn(true);
+    },
+  });
+  gisInited = true;
+  maybeEnableGoogleBtn();
+}
+
+function maybeEnableGoogleBtn() {
+  if (gapiInited && gisInited) {
+    const btn = document.getElementById('google-sync-btn');
+    if (btn) btn.disabled = false;
+  }
+}
+
+function handleGoogleSignIn() {
+  if (gapi.client.getToken() === null) {
+    tokenClient.requestAccessToken({ prompt: 'consent' });
+  } else {
+    tokenClient.requestAccessToken({ prompt: '' });
+  }
+}
+
+function handleGoogleSignOut() {
+  const token = gapi.client.getToken();
+  if (token) {
+    google.accounts.oauth2.revoke(token.access_token);
+    gapi.client.setToken('');
+  }
+  googleEvents = [];
+  renderCalendar();
+  renderUpcoming();
+  updateGoogleBtn(false);
+  showToast('Disconnected from Google Calendar.', 'info');
+}
+
+function updateGoogleBtn(connected) {
+  const btn      = document.getElementById('google-sync-btn');
+  const signout  = document.getElementById('google-signout-btn');
+  const status   = document.getElementById('google-sync-status');
+  if (!btn) return;
+  if (connected) {
+    btn.style.display    = 'none';
+    signout.style.display = 'inline-flex';
+    if (status) status.style.display = 'flex';
+  } else {
+    btn.style.display    = 'inline-flex';
+    signout.style.display = 'none';
+    if (status) status.style.display = 'none';
+  }
+}
+
+async function fetchGoogleEvents() {
+  try {
+    const now     = new Date();
+    const start   = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
+    const end     = new Date(now.getFullYear(), now.getMonth() + 3, 0).toISOString();
+
+    const resp = await gapi.client.calendar.events.list({
+      calendarId: 'primary',
+      timeMin: start,
+      timeMax: end,
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 200,
+    });
+
+    googleEvents = (resp.result.items || []).map(ev => {
+      const isAllDay = !!ev.start.date;
+      const date     = isAllDay ? ev.start.date : ev.start.dateTime?.slice(0,10);
+      const startT   = isAllDay ? null : ev.start.dateTime?.slice(11,16);
+      const endT     = isAllDay ? null : ev.end?.dateTime?.slice(11,16);
+      return { id: 'gcal-' + ev.id, title: ev.summary || '(No title)', date, startTime: startT, endTime: endT, allDay: isAllDay, source: 'google', owner: 'gcal' };
+    }).filter(ev => ev.date);
+
+    renderCalendar();
+    renderUpcoming();
+    showToast(`Synced ${googleEvents.length} Google Calendar events!`);
+  } catch (e) {
+    showToast('Failed to fetch Google Calendar events.', 'error');
+  }
+}
+
+// ── Merge RSRC + Google events for a date ────────────────────────────────
+
+function getAllEventsForDate(dateKey, user) {
+  const rsrc   = filterEvents(allEvents[dateKey] || [], user);
+  const gcal   = googleEvents.filter(ev => ev.date === dateKey);
+  return [...rsrc, ...gcal];
+}
+
+function getAllUpcomingEvents(user, today) {
+  const rsrcDates = Object.entries(allEvents)
+    .filter(([d]) => d >= today)
+    .flatMap(([dateKey, evs]) => filterEvents(evs, user).map(ev => ({ ...ev, dateKey })));
+
+  const gcalDates = googleEvents
+    .filter(ev => ev.date >= today)
+    .map(ev => ({ ...ev, dateKey: ev.date }));
+
+  return [...rsrcDates, ...gcalDates].sort((a,b) => a.dateKey.localeCompare(b.dateKey));
 }
 
 // ── Calendar rendering ────────────────────────────────────────────────────
@@ -77,25 +204,24 @@ function renderCalendar() {
     numEl.textContent = day;
     cell.appendChild(numEl);
 
-    const events = filterEvents(allEvents[dateKey] || [], user);
+    const events = getAllEventsForDate(dateKey, user);
     if (events.length) {
       const dots = document.createElement('div');
       dots.className = 'event-dots';
 
       events.slice(0, 3).forEach(ev => {
-        const m = MEMBERS[ev.owner] || MEMBERS.master;
+        const isGcal = ev.source === 'google';
+        const color  = isGcal ? '#4285f4' : (MEMBERS[ev.owner] || MEMBERS.master).color;
 
         if (ev.allDay) {
-          // Full-day event: colored bar spanning full width
           dots.innerHTML += `
-            <div class="event-bar" style="background:${m.color}">
+            <div class="event-bar" style="background:${color}">
               <span class="event-bar-label">${ev.title}</span>
             </div>`;
         } else {
-          // Regular event: dot + label
           dots.innerHTML += `
             <div class="event-dot">
-              <span class="event-dot-indicator" style="background:${m.color}"></span>
+              <span class="event-dot-indicator" style="background:${color}"></span>
               <span class="event-dot-label">${ev.title}</span>
             </div>`;
         }
@@ -124,31 +250,27 @@ function renderUpcoming() {
   const user  = getCurrentUser();
   const today = todayStr();
   const list  = document.getElementById('upcoming-list');
-
-  const upcoming = [];
-  Object.entries(allEvents).forEach(([dateKey, evs]) => {
-    if (dateKey >= today) {
-      filterEvents(evs, user).forEach(ev => upcoming.push({ ...ev, dateKey }));
-    }
-  });
-  upcoming.sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+  const upcoming = getAllUpcomingEvents(user, today);
 
   if (!upcoming.length) {
     list.innerHTML = '<p style="font-size:13px;color:#bbb;padding:8px 0">No upcoming events.</p>';
     return;
   }
 
-  list.innerHTML = upcoming.slice(0, 6).map(ev => {
-    const m = MEMBERS[ev.owner] || MEMBERS.master;
-    const allDayLabel = ev.allDay ? '<span style="font-size:11px;background:#edf5eb;color:#2a5c23;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px">All day</span>' : '';
+  list.innerHTML = upcoming.slice(0, 8).map(ev => {
+    const isGcal   = ev.source === 'google';
+    const color    = isGcal ? '#4285f4' : (MEMBERS[ev.owner] || MEMBERS.master).color;
+    const allDayTag = ev.allDay ? '<span style="font-size:11px;background:#edf5eb;color:#2a5c23;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px">All day</span>' : '';
+    const gcalTag   = isGcal   ? '<span style="font-size:11px;background:#e8f0fe;color:#4285f4;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px">Google</span>' : '';
+
     return `
       <div class="upcoming-card">
-        <div style="width:3px;border-radius:2px;background:${m.color};align-self:stretch;flex-shrink:0"></div>
+        <div style="width:3px;border-radius:2px;background:${color};align-self:stretch;flex-shrink:0"></div>
         <div style="flex:1;min-width:0">
-          <div class="upcoming-title">${ev.title}${allDayLabel}</div>
+          <div class="upcoming-title">${ev.title}${allDayTag}${gcalTag}</div>
           <div class="upcoming-meta">${formatDate(ev.dateKey)}${ev.startTime ? ' · ' + ev.startTime : ''}${ev.location ? ' · ' + ev.location : ''}</div>
         </div>
-        ${memberAvatar(ev.owner || 'master', 7)}
+        ${isGcal ? '<span style="font-size:18px">📅</span>' : memberAvatar(ev.owner || 'master', 7)}
       </div>`;
   }).join('');
 }
@@ -157,7 +279,7 @@ function renderUpcoming() {
 
 function openDayModal(dateKey, day, month) {
   const user   = getCurrentUser();
-  const events = filterEvents(allEvents[dateKey] || [], user);
+  const events = getAllEventsForDate(dateKey, user);
   const label  = `${day} ${MONTH_NAMES[month]}`;
 
   document.getElementById('day-modal-title').textContent = label;
@@ -167,28 +289,34 @@ function openDayModal(dateKey, day, month) {
     list.innerHTML = '<p style="font-size:13px;color:#bbb">No events this day.</p>';
   } else {
     list.innerHTML = events.map(ev => {
-      const m = MEMBERS[ev.owner] || MEMBERS.master;
+      const isGcal   = ev.source === 'google';
+      const color    = isGcal ? '#4285f4' : (MEMBERS[ev.owner] || MEMBERS.master).color;
       const allDayTag = ev.allDay ? '<span style="font-size:11px;background:#edf5eb;color:#2a5c23;padding:1px 6px;border-radius:3px;font-weight:600">All day</span>' : '';
+      const gcalTag   = isGcal   ? '<span style="font-size:11px;background:#e8f0fe;color:#4285f4;padding:1px 6px;border-radius:3px;font-weight:600">Google Cal</span>' : '';
+
+      const actions = isGcal ? '' : `
+        <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">
+          <button class="edit-btn" onclick="closeModal('day-modal');openEditEventModal('${ev.id}')" title="Edit">
+            <svg style="width:15px;height:15px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+          </button>
+          <button class="delete-btn" onclick="deleteEvent('${ev.id}')">
+            <svg style="width:15px;height:15px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          </button>
+        </div>`;
+
       return `
         <div class="day-event-row">
-          <div style="width:3px;border-radius:2px;background:${m.color};align-self:stretch;flex-shrink:0"></div>
+          <div style="width:3px;border-radius:2px;background:${color};align-self:stretch;flex-shrink:0"></div>
           <div style="flex:1;min-width:0">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span class="day-event-title">${ev.title}</span>
-              ${allDayTag}
+              ${allDayTag}${gcalTag}
             </div>
             ${ev.startTime ? `<div class="day-event-meta">${ev.startTime}${ev.endTime ? ' – ' + ev.endTime : ''}</div>` : ''}
             ${ev.location ? `<div class="day-event-meta">${ev.location}</div>` : ''}
             ${ev.description ? `<div class="day-event-meta" style="margin-top:4px">${ev.description}</div>` : ''}
           </div>
-          <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">
-            <button class="edit-btn" onclick="closeModal('day-modal');openEditEventModal('${ev.id}')" title="Edit">
-              <svg style="width:15px;height:15px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-            </button>
-            <button class="delete-btn" onclick="deleteEvent('${ev.id}')">
-              <svg style="width:15px;height:15px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-            </button>
-          </div>
+          ${actions}
         </div>`;
     }).join('');
   }
@@ -201,7 +329,7 @@ function openDayModal(dateKey, day, month) {
   document.getElementById('day-modal').classList.remove('hidden');
 }
 
-// ── Create event modal ────────────────────────────────────────────────────
+// ── Create / Edit event modals ────────────────────────────────────────────
 
 function openCreateEventModal(dateKey) {
   editingEventId = null;
@@ -226,10 +354,7 @@ function openCreateEventModal(dateKey) {
   document.getElementById('event-modal').classList.remove('hidden');
 }
 
-// ── Edit event modal ──────────────────────────────────────────────────────
-
 function openEditEventModal(eventId) {
-  // Find the event in allEvents
   let ev = null;
   Object.values(allEvents).forEach(evs => {
     const found = evs.find(e => e.id === eventId);
@@ -258,14 +383,10 @@ function openEditEventModal(eventId) {
   document.getElementById('event-modal').classList.remove('hidden');
 }
 
-// ── Toggle all-day (hide/show time fields) ────────────────────────────────
-
 function toggleAllDay() {
   const isAllDay = document.getElementById('ev-allday').checked;
   document.getElementById('ev-time-fields').style.display = isAllDay ? 'none' : 'grid';
 }
-
-// ── Save event (create or update) ─────────────────────────────────────────
 
 function saveEvent() {
   const title = document.getElementById('ev-title').value.trim();
@@ -273,11 +394,9 @@ function saveEvent() {
   if (!title || !date) { showToast('Title and date are required.', 'error'); return; }
 
   const allDay = document.getElementById('ev-allday').checked;
-
   const eventData = {
-    title,
-    date,
-    allDay: allDay,
+    title, date,
+    allDay,
     startTime:   allDay ? null : (document.getElementById('ev-start').value || null),
     endTime:     allDay ? null : (document.getElementById('ev-end').value   || null),
     location:    document.getElementById('ev-location').value.trim() || null,
@@ -286,13 +405,11 @@ function saveEvent() {
   };
 
   if (editingEventId) {
-    // Update existing
     db.collection('events').doc(editingEventId).update(eventData).then(() => {
       closeModal('event-modal');
       showToast('Event updated!');
     }).catch(() => showToast('Failed to update event.', 'error'));
   } else {
-    // Create new
     eventData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
     db.collection('events').add(eventData).then(() => {
       closeModal('event-modal');
@@ -315,15 +432,13 @@ function deleteEvent(id) {
 function prevMonth() {
   currentMonth--;
   if (currentMonth < 0) { currentMonth = 11; currentYear--; }
-  renderCalendar();
-  renderUpcoming();
+  renderCalendar(); renderUpcoming();
 }
 
 function nextMonth() {
   currentMonth++;
   if (currentMonth > 11) { currentMonth = 0; currentYear++; }
-  renderCalendar();
-  renderUpcoming();
+  renderCalendar(); renderUpcoming();
 }
 
 // ── Overlay close ─────────────────────────────────────────────────────────
@@ -341,8 +456,7 @@ document.querySelectorAll('[data-filter]').forEach(btn => {
     activeFilter = btn.dataset.filter;
     document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    renderCalendar();
-    renderUpcoming();
+    renderCalendar(); renderUpcoming();
   });
 });
 
