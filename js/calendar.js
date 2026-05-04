@@ -1,19 +1,19 @@
 // ─── RSRC Dashboard — Calendar Page ─────────────────────────────────────────
 
 let currentYear, currentMonth;
-let allEvents    = {};   // Firestore RSRC events keyed by date
-let vacations    = {};   // Firestore vacations keyed by memberKey
+let allEvents    = {};
+let vacations    = {};
+let sharedGcal   = {};  // { memberKey: [events] } saved in Firebase
 let activeFilter = 'all';
-let currentView  = 'board'; // 'board' | 'overlap' | 'mine'
+let currentView  = 'board';
 let editingEventId = null;
 
 // Google Calendar state
-let googleEvents  = [];
-let allMemberGcal = {};
+let googleEvents = [];
 let gisInited = false, gapiInited = false;
 let tokenClient;
-const GAPI_CLIENT_ID = '168392677616-hac8fi72088cp6drtf4l2sdeo42nv1d9.apps.googleusercontent.com';
-const GCAL_SCOPE     = 'https://www.googleapis.com/auth/calendar.readonly';
+const GAPI_CLIENT_ID     = '168392677616-hac8fi72088cp6drtf4l2sdeo42nv1d9.apps.googleusercontent.com';
+const GCAL_SCOPE         = 'https://www.googleapis.com/auth/calendar.readonly';
 const GCAL_CONNECTED_KEY = 'rsrc_gcal_connected';
 
 function closeModal(id) {
@@ -52,6 +52,35 @@ function loadEvents() {
   });
 }
 
+// ── Firestore: Shared Google Calendar events ──────────────────────────────
+
+function loadSharedGcal() {
+  db.collection('gcal_shared').onSnapshot(snapshot => {
+    sharedGcal = {};
+    snapshot.forEach(doc => {
+      sharedGcal[doc.id] = doc.data().events || [];
+    });
+    renderCalendar();
+    renderUpcoming();
+  });
+}
+
+// Save current user's Google events to Firebase so everyone can see them
+async function saveGcalToFirebase(events) {
+  const user = getCurrentUser();
+  if (!user) return;
+  await db.collection('gcal_shared').doc(user).set({ events, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+}
+
+// Get all shared Google events as a flat array with ownerKey attached
+function getAllSharedGcalEvents() {
+  const all = [];
+  Object.entries(sharedGcal).forEach(([memberKey, events]) => {
+    events.forEach(ev => all.push({ ...ev, sharedBy: memberKey }));
+  });
+  return all;
+}
+
 // ── Firestore: Vacations ──────────────────────────────────────────────────
 
 function loadVacations() {
@@ -88,16 +117,14 @@ function renderVacationList() {
     const m = MEMBERS[memberKey];
     if (!m) return;
     periods.forEach((p, idx) => {
-      if ((p.end || p.start) >= today) {
-        upcoming.push({ memberKey, m, p, idx });
-      }
+      if ((p.end || p.start) >= today) upcoming.push({ memberKey, m, p, idx });
     });
   });
 
   upcoming.sort((a,b) => a.p.start.localeCompare(b.p.start));
 
   if (!upcoming.length) {
-    list.innerHTML = '<p style="font-size:13px;color:#bbb">No upcoming absences.</p>';
+    list.innerHTML = '<p style="font-size:13px;color:#bbb;padding:4px 0">No upcoming absences.</p>';
     return;
   }
 
@@ -107,17 +134,27 @@ function renderVacationList() {
       ? `${formatDate(p.start)} – ${formatDate(p.end)}`
       : formatDate(p.start);
     return `
-      <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fff;border:1px solid #e2e1dd;border-radius:7px;">
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:#f7f6f2;border:1px solid #e2e1dd;border-radius:6px;">
         <div style="width:3px;border-radius:2px;background:${color};align-self:stretch;flex-shrink:0"></div>
         <div style="flex:1">
-          <div style="font-size:13.5px;font-weight:600;color:#111">${m.name} — ${p.label || 'Away'}</div>
-          <div style="font-size:12px;color:#999;margin-top:2px">${dateStr}</div>
+          <div style="font-size:13px;font-weight:600;color:#111">${m.name} — ${p.label || 'Away'}</div>
+          <div style="font-size:11.5px;color:#999;margin-top:1px">${dateStr}</div>
         </div>
-        <button onclick="deleteVacation('${memberKey}',${idx})" style="background:none;border:none;cursor:pointer;color:#ddd;transition:color .15s;padding:2px" onmouseover="this.style.color='#b81c1c'" onmouseout="this.style.color='#ddd'">
-          <svg style="width:14px;height:14px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        <button onclick="deleteVacation('${memberKey}',${idx})"
+          style="background:none;border:none;cursor:pointer;color:#ddd;padding:2px;transition:color .15s"
+          onmouseover="this.style.color='#b81c1c'" onmouseout="this.style.color='#ddd'">
+          <svg style="width:13px;height:13px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
         </button>
       </div>`;
   }).join('');
+}
+
+function toggleVacationSection() {
+  const body    = document.getElementById('vacation-body');
+  const chevron = document.getElementById('vacation-chevron');
+  const isOpen  = body.style.display !== 'none';
+  body.style.display    = isOpen ? 'none' : 'flex';
+  chevron.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
 }
 
 function saveVacation() {
@@ -164,7 +201,7 @@ function gisLoaded() {
     callback: async (resp) => {
       if (resp.error) { showToast('Google auth failed.', 'error'); return; }
       localStorage.setItem(GCAL_CONNECTED_KEY, '1');
-      await fetchGoogleEvents();
+      await fetchAndSaveGoogleEvents();
       updateGoogleBtn(true);
     },
   });
@@ -176,8 +213,6 @@ function maybeAutoConnect() {
   if (!gapiInited || !gisInited) return;
   const btn = document.getElementById('google-sync-btn');
   if (btn) btn.disabled = false;
-
-  // Auto-reconnect silently if previously connected
   if (localStorage.getItem(GCAL_CONNECTED_KEY) === '1') {
     tokenClient.requestAccessToken({ prompt: '' });
   }
@@ -207,7 +242,7 @@ function updateGoogleBtn(connected) {
   if (status) status.style.display = connected ? 'flex' : 'none';
 }
 
-async function fetchGoogleEvents() {
+async function fetchAndSaveGoogleEvents() {
   try {
     const now   = new Date();
     const start = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
@@ -219,48 +254,41 @@ async function fetchGoogleEvents() {
       singleEvents: true, orderBy: 'startTime', maxResults: 250,
     });
 
-    googleEvents = parseGcalEvents(resp.result.items || [], 'gcal-me');
+    // Parse events
+    googleEvents = parseGcalEvents(resp.result.items || []);
+
+    // Save to Firebase so everyone can see them (replace all)
+    await saveGcalToFirebase(googleEvents);
+
     renderCalendar(); renderUpcoming();
-    showToast(`Synced ${googleEvents.length} Google events!`);
+    showToast(`Synced ${googleEvents.length} Google events — shared with board!`);
   } catch (e) {
     showToast('Failed to fetch Google Calendar.', 'error');
   }
 }
 
-// ── FIXED: timezone-safe Google event parsing ─────────────────────────────
-
-function parseGcalEvents(items, ownerTag) {
+function parseGcalEvents(items) {
   return items.map(ev => {
     const isAllDay = !!ev.start.date;
-
-    // For all-day events, use the date string directly — never parse through Date()
-    // For timed events, slice the dateTime string to get YYYY-MM-DD
-    const date = isAllDay
-      ? ev.start.date
-      : ev.start.dateTime?.slice(0, 10);
+    const date = isAllDay ? ev.start.date : ev.start.dateTime?.slice(0, 10);
 
     let endDate = null;
     if (isAllDay && ev.end?.date) {
-      // Google's end date for all-day events is EXCLUSIVE (next day)
-      // Subtract 1 day using string manipulation to avoid timezone issues
       const parts = ev.end.date.split('-');
       const d = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])));
       d.setUTCDate(d.getUTCDate() - 1);
       endDate = d.toISOString().slice(0, 10);
-      if (endDate === date) endDate = null; // single day, no end date needed
+      if (endDate === date) endDate = null;
     }
 
-    // For timed events, extract time from dateTime string directly
-    const startTime = isAllDay ? null : ev.start.dateTime?.slice(11, 16);
-    const endTime   = isAllDay ? null : ev.end?.dateTime?.slice(11, 16);
-
     return {
-      id: ownerTag + '-' + ev.id,
+      id: 'gcal-' + ev.id,
       title: ev.summary || '(No title)',
-      date, endDate, startTime, endTime,
+      date, endDate,
+      startTime: isAllDay ? null : ev.start.dateTime?.slice(11, 16),
+      endTime:   isAllDay ? null : ev.end?.dateTime?.slice(11, 16),
       allDay: isAllDay,
       source: 'google',
-      owner: ownerTag,
     };
   }).filter(ev => ev.date);
 }
@@ -284,8 +312,8 @@ function switchView(view) {
 
   const subtitles = {
     board:   'Shared board events, matches & training sessions',
-    overlap: 'Everyone\'s schedules overlaid — spot conflicts & free slots',
-    mine:    'Your personal Google Calendar',
+    overlap: 'Everyone\'s Google Calendars overlaid — spot conflicts & free slots',
+    mine:    'Your personal Google Calendar (synced & shared with the board)',
   };
   const sub = document.getElementById('page-sub');
   if (sub) sub.textContent = subtitles[view];
@@ -294,7 +322,7 @@ function switchView(view) {
   renderUpcoming();
 }
 
-// ── Get events for a date based on current view ───────────────────────────
+// ── Get events for date based on view ─────────────────────────────────────
 
 function getEventsForDate(dateKey) {
   const user = getCurrentUser();
@@ -304,19 +332,22 @@ function getEventsForDate(dateKey) {
   }
 
   if (currentView === 'mine') {
-    return googleEvents.filter(ev => {
+    // My own Google events (from Firebase shared collection)
+    const myShared = sharedGcal[user] || [];
+    return myShared.filter(ev => {
       const dates = getDateRange(ev.date, ev.endDate || ev.date);
       return dates.includes(dateKey);
     });
   }
 
   if (currentView === 'overlap') {
+    // RSRC events + ALL members' shared Google Calendar events
     const rsrc = allEvents[dateKey] || [];
-    const gcal = googleEvents.filter(ev => {
+    const allGcal = getAllSharedGcalEvents().filter(ev => {
       const dates = getDateRange(ev.date, ev.endDate || ev.date);
       return dates.includes(dateKey);
     });
-    return [...rsrc, ...gcal];
+    return [...rsrc, ...allGcal];
   }
 
   return [];
@@ -349,6 +380,8 @@ function renderCalendar() {
   const daysInPrevMonth = new Date(currentYear, currentMonth, 0).getDate();
   const today = todayStr();
   const totalCells = Math.ceil((offset + daysInMonth) / 7) * 7;
+
+  const avatarColors = { boris:'#8b3535', sjef:'#2a4a6e', oliver:'#2a5c23', ewan:'#4a3570', casper:'#7a5220' };
 
   for (let i = 0; i < totalCells; i++) {
     const cell = document.createElement('div');
@@ -386,13 +419,12 @@ function renderCalendar() {
 
     // Vacation bars (board view only)
     if (currentView === 'board') {
-      const away = getMemberVacationsForDate(dateKey);
-      away.forEach(({ memberKey }) => {
-        const color = { boris:'#8b3535', sjef:'#2a4a6e', oliver:'#2a5c23', ewan:'#4a3570', casper:'#7a5220' }[memberKey] || '#888';
+      getMemberVacationsForDate(dateKey).forEach(({ memberKey }) => {
+        const color = avatarColors[memberKey] || '#888';
         const m = MEMBERS[memberKey];
         dots.innerHTML += `
-          <div class="event-bar" style="background:${color};opacity:0.75">
-            <span class="event-bar-label">✈ ${m?.name} away</span>
+          <div class="event-bar" style="background:${color};opacity:0.7">
+            <span class="event-bar-label">✈ ${m?.name}</span>
           </div>`;
       });
     }
@@ -402,8 +434,17 @@ function renderCalendar() {
     events.slice(0, 3).forEach(ev => {
       if (seen.has(ev.id)) return;
       seen.add(ev.id);
-      const isGcal  = ev.source === 'google';
-      const color   = isGcal ? '#4285f4' : (MEMBERS[ev.owner] || MEMBERS.master).color;
+
+      const isGcal = ev.source === 'google';
+      let color;
+      if (isGcal) {
+        // In overlap view, color by sharedBy member; in mine view use blue
+        color = currentView === 'overlap' && ev.sharedBy
+          ? (avatarColors[ev.sharedBy] || '#4285f4')
+          : '#4285f4';
+      } else {
+        color = (MEMBERS[ev.owner] || MEMBERS.master).color;
+      }
       const isStart = ev.date === dateKey;
 
       if (ev.allDay) {
@@ -436,22 +477,24 @@ function renderUpcoming() {
   const user  = getCurrentUser();
   const today = todayStr();
   const list  = document.getElementById('upcoming-list');
+  const avatarColors = { boris:'#8b3535', sjef:'#2a4a6e', oliver:'#2a5c23', ewan:'#4a3570', casper:'#7a5220' };
 
   let upcoming = [];
 
   if (currentView === 'board') {
     const rsrc = Object.entries(allEvents)
       .filter(([d]) => d >= today)
-      .flatMap(([dateKey, evs]) => filterEvents(evs, user).map(ev => ({ ...ev, dateKey })));
+      .flatMap(([_, evs]) => filterEvents(evs, user).map(ev => ({ ...ev, dateKey: ev.date })));
     const seen = new Set();
     upcoming = rsrc.filter(ev => { if (seen.has(ev.id)) return false; seen.add(ev.id); return true; });
   } else if (currentView === 'mine') {
-    upcoming = googleEvents.filter(ev => ev.date >= today).map(ev => ({ ...ev, dateKey: ev.date }));
+    const myShared = sharedGcal[user] || [];
+    upcoming = myShared.filter(ev => ev.date >= today).map(ev => ({ ...ev, dateKey: ev.date }));
   } else if (currentView === 'overlap') {
     const rsrc = Object.entries(allEvents)
       .filter(([d]) => d >= today)
       .flatMap(([_, evs]) => evs.map(ev => ({ ...ev, dateKey: ev.date })));
-    const gcal = googleEvents.filter(ev => ev.date >= today).map(ev => ({ ...ev, dateKey: ev.date }));
+    const gcal = getAllSharedGcalEvents().filter(ev => ev.date >= today).map(ev => ({ ...ev, dateKey: ev.date }));
     const seen = new Set();
     upcoming = [...rsrc, ...gcal].filter(ev => { if (seen.has(ev.id)) return false; seen.add(ev.id); return true; });
   }
@@ -464,10 +507,25 @@ function renderUpcoming() {
   }
 
   list.innerHTML = upcoming.slice(0, 8).map(ev => {
-    const isGcal    = ev.source === 'google';
-    const color     = isGcal ? '#4285f4' : (MEMBERS[ev.owner] || MEMBERS.master).color;
+    const isGcal = ev.source === 'google';
+    let color;
+    if (isGcal) {
+      color = currentView === 'overlap' && ev.sharedBy ? (avatarColors[ev.sharedBy] || '#4285f4') : '#4285f4';
+    } else {
+      color = (MEMBERS[ev.owner] || MEMBERS.master).color;
+    }
+
     const allDayTag = ev.allDay ? '<span style="font-size:11px;background:#edf5eb;color:#2a5c23;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px">All day</span>' : '';
-    const gcalTag   = isGcal   ? '<span style="font-size:11px;background:#e8f0fe;color:#4285f4;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px">Google</span>' : '';
+
+    // In overlap view, show whose Google calendar it's from
+    let sourceTag = '';
+    if (isGcal && ev.sharedBy && currentView === 'overlap') {
+      const m = MEMBERS[ev.sharedBy];
+      sourceTag = `<span style="font-size:11px;background:#f0efeb;color:#555;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px">📅 ${m?.name}</span>`;
+    } else if (isGcal) {
+      sourceTag = '<span style="font-size:11px;background:#e8f0fe;color:#4285f4;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px">Google</span>';
+    }
+
     const dateRange = (ev.allDay && ev.endDate && ev.endDate !== ev.date)
       ? `${formatDate(ev.dateKey)} – ${formatDate(ev.endDate)}`
       : formatDate(ev.dateKey);
@@ -476,10 +534,10 @@ function renderUpcoming() {
       <div class="upcoming-card">
         <div style="width:3px;border-radius:2px;background:${color};align-self:stretch;flex-shrink:0"></div>
         <div style="flex:1;min-width:0">
-          <div class="upcoming-title">${ev.title}${allDayTag}${gcalTag}</div>
+          <div class="upcoming-title">${ev.title}${allDayTag}${sourceTag}</div>
           <div class="upcoming-meta">${dateRange}${ev.startTime ? ' · ' + ev.startTime : ''}${ev.location ? ' · ' + ev.location : ''}</div>
         </div>
-        ${isGcal ? '<span style="font-size:16px">📅</span>' : memberAvatar(ev.owner || 'master', 7)}
+        ${isGcal ? '<span style="font-size:15px">📅</span>' : memberAvatar(ev.owner || 'master', 7)}
       </div>`;
   }).join('');
 }
@@ -492,13 +550,13 @@ function openDayModal(dateKey, day, month) {
 
   const events = getEventsForDate(dateKey);
   const away   = currentView === 'board' ? getMemberVacationsForDate(dateKey) : [];
+  const avatarColors = { boris:'#8b3535', sjef:'#2a4a6e', oliver:'#2a5c23', ewan:'#4a3570', casper:'#7a5220' };
 
-  const list = document.getElementById('day-events-list');
   let html = '';
 
   away.forEach(({ memberKey, label: awayLabel }) => {
     const m = MEMBERS[memberKey];
-    const color = { boris:'#8b3535', sjef:'#2a4a6e', oliver:'#2a5c23', ewan:'#4a3570', casper:'#7a5220' }[memberKey] || '#888';
+    const color = avatarColors[memberKey] || '#888';
     html += `
       <div class="day-event-row" style="background:#fffbf5;border-color:#f0e8d5">
         <div style="width:3px;border-radius:2px;background:${color};align-self:stretch;flex-shrink:0"></div>
@@ -519,10 +577,23 @@ function openDayModal(dateKey, day, month) {
     events.forEach(ev => {
       if (seen.has(ev.id)) return;
       seen.add(ev.id);
-      const isGcal    = ev.source === 'google';
-      const color     = isGcal ? '#4285f4' : (MEMBERS[ev.owner] || MEMBERS.master).color;
+
+      const isGcal = ev.source === 'google';
+      let color;
+      if (isGcal) {
+        color = currentView === 'overlap' && ev.sharedBy ? (avatarColors[ev.sharedBy] || '#4285f4') : '#4285f4';
+      } else {
+        color = (MEMBERS[ev.owner] || MEMBERS.master).color;
+      }
+
       const allDayTag = ev.allDay ? '<span style="font-size:11px;background:#edf5eb;color:#2a5c23;padding:1px 6px;border-radius:3px;font-weight:600">All day</span>' : '';
-      const gcalTag   = isGcal   ? '<span style="font-size:11px;background:#e8f0fe;color:#4285f4;padding:1px 6px;border-radius:3px;font-weight:600">Google Cal</span>' : '';
+      let sourceTag = '';
+      if (isGcal && ev.sharedBy) {
+        const m = MEMBERS[ev.sharedBy];
+        sourceTag = `<span style="font-size:11px;background:#e8f0fe;color:#4285f4;padding:1px 6px;border-radius:3px;font-weight:600">📅 ${m?.name || 'Google'}</span>`;
+      } else if (isGcal) {
+        sourceTag = '<span style="font-size:11px;background:#e8f0fe;color:#4285f4;padding:1px 6px;border-radius:3px;font-weight:600">Google Cal</span>';
+      }
       const dateRange = (ev.allDay && ev.endDate && ev.endDate !== ev.date)
         ? `${formatDate(ev.date)} – ${formatDate(ev.endDate)}` : '';
 
@@ -541,7 +612,7 @@ function openDayModal(dateKey, day, month) {
           <div style="width:3px;border-radius:2px;background:${color};align-self:stretch;flex-shrink:0"></div>
           <div style="flex:1;min-width:0">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-              <span class="day-event-title">${ev.title}</span>${allDayTag}${gcalTag}
+              <span class="day-event-title">${ev.title}</span>${allDayTag}${sourceTag}
             </div>
             ${dateRange ? `<div class="day-event-meta">${dateRange}</div>` : ''}
             ${ev.startTime ? `<div class="day-event-meta">${ev.startTime}${ev.endTime ? ' – ' + ev.endTime : ''}</div>` : ''}
@@ -705,4 +776,5 @@ document.querySelectorAll('[data-filter]').forEach(btn => {
   initApp('calendar');
   loadEvents();
   loadVacations();
+  loadSharedGcal();
 })();
