@@ -2,7 +2,7 @@
 
 let currentYear, currentMonth, allEvents = {}, activeFilter = 'all';
 let editingEventId = null;
-let googleEvents = []; // events pulled from Google Calendar
+let googleEvents = [];
 let gisInited = false, gapiInited = false;
 let tokenClient;
 
@@ -13,6 +13,21 @@ function closeModal(id) {
   document.getElementById(id)?.classList.add('hidden');
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+// Returns all dates between startDate and endDate inclusive (YYYY-MM-DD strings)
+function getDateRange(startDate, endDate) {
+  const dates = [];
+  const start = new Date(startDate + 'T00:00:00');
+  const end   = new Date((endDate || startDate) + 'T00:00:00');
+  const cur   = new Date(start);
+  while (cur <= end) {
+    dates.push(cur.toISOString().slice(0, 10));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return dates;
+}
+
 // ── Firestore listener ────────────────────────────────────────────────────
 
 function loadEvents() {
@@ -20,8 +35,18 @@ function loadEvents() {
     allEvents = {};
     snapshot.forEach(doc => {
       const d = { id: doc.id, ...doc.data() };
-      if (!allEvents[d.date]) allEvents[d.date] = [];
-      allEvents[d.date].push(d);
+      // For multi-day events, register event on every date in the range
+      const dates = (d.allDay && d.endDate)
+        ? getDateRange(d.date, d.endDate)
+        : [d.date];
+
+      dates.forEach(dateKey => {
+        if (!allEvents[dateKey]) allEvents[dateKey] = [];
+        // Avoid duplicate if already added (same event on same date)
+        if (!allEvents[dateKey].find(e => e.id === d.id)) {
+          allEvents[dateKey].push(d);
+        }
+      });
     });
     renderCalendar();
     renderUpcoming();
@@ -83,16 +108,16 @@ function handleGoogleSignOut() {
 }
 
 function updateGoogleBtn(connected) {
-  const btn      = document.getElementById('google-sync-btn');
-  const signout  = document.getElementById('google-signout-btn');
-  const status   = document.getElementById('google-sync-status');
+  const btn     = document.getElementById('google-sync-btn');
+  const signout = document.getElementById('google-signout-btn');
+  const status  = document.getElementById('google-sync-status');
   if (!btn) return;
   if (connected) {
-    btn.style.display    = 'none';
+    btn.style.display     = 'none';
     signout.style.display = 'inline-flex';
     if (status) status.style.display = 'flex';
   } else {
-    btn.style.display    = 'inline-flex';
+    btn.style.display     = 'inline-flex';
     signout.style.display = 'none';
     if (status) status.style.display = 'none';
   }
@@ -100,25 +125,34 @@ function updateGoogleBtn(connected) {
 
 async function fetchGoogleEvents() {
   try {
-    const now     = new Date();
-    const start   = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
-    const end     = new Date(now.getFullYear(), now.getMonth() + 3, 0).toISOString();
+    const now   = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
+    const end   = new Date(now.getFullYear(), now.getMonth() + 3, 0).toISOString();
 
     const resp = await gapi.client.calendar.events.list({
       calendarId: 'primary',
-      timeMin: start,
-      timeMax: end,
-      singleEvents: true,
-      orderBy: 'startTime',
-      maxResults: 200,
+      timeMin: start, timeMax: end,
+      singleEvents: true, orderBy: 'startTime', maxResults: 200,
     });
 
     googleEvents = (resp.result.items || []).map(ev => {
       const isAllDay = !!ev.start.date;
       const date     = isAllDay ? ev.start.date : ev.start.dateTime?.slice(0,10);
-      const startT   = isAllDay ? null : ev.start.dateTime?.slice(11,16);
-      const endT     = isAllDay ? null : ev.end?.dateTime?.slice(11,16);
-      return { id: 'gcal-' + ev.id, title: ev.summary || '(No title)', date, startTime: startT, endTime: endT, allDay: isAllDay, source: 'google', owner: 'gcal' };
+      // Google all-day end date is exclusive, so subtract 1 day
+      let endDate = null;
+      if (isAllDay && ev.end?.date) {
+        const d = new Date(ev.end.date + 'T00:00:00');
+        d.setDate(d.getDate() - 1);
+        endDate = d.toISOString().slice(0,10);
+        if (endDate === date) endDate = null; // single day
+      }
+      const startT = isAllDay ? null : ev.start.dateTime?.slice(11,16);
+      const endT   = isAllDay ? null : ev.end?.dateTime?.slice(11,16);
+      return {
+        id: 'gcal-' + ev.id, title: ev.summary || '(No title)',
+        date, endDate, startTime: startT, endTime: endT,
+        allDay: isAllDay, source: 'google', owner: 'gcal'
+      };
     }).filter(ev => ev.date);
 
     renderCalendar();
@@ -132,8 +166,11 @@ async function fetchGoogleEvents() {
 // ── Merge RSRC + Google events for a date ────────────────────────────────
 
 function getAllEventsForDate(dateKey, user) {
-  const rsrc   = filterEvents(allEvents[dateKey] || [], user);
-  const gcal   = googleEvents.filter(ev => ev.date === dateKey);
+  const rsrc = filterEvents(allEvents[dateKey] || [], user);
+  const gcal = googleEvents.filter(ev => {
+    const dates = getDateRange(ev.date, ev.endDate || ev.date);
+    return dates.includes(dateKey);
+  });
   return [...rsrc, ...gcal];
 }
 
@@ -142,11 +179,20 @@ function getAllUpcomingEvents(user, today) {
     .filter(([d]) => d >= today)
     .flatMap(([dateKey, evs]) => filterEvents(evs, user).map(ev => ({ ...ev, dateKey })));
 
+  // For upcoming, only show start date of multi-day events
   const gcalDates = googleEvents
     .filter(ev => ev.date >= today)
     .map(ev => ({ ...ev, dateKey: ev.date }));
 
-  return [...rsrcDates, ...gcalDates].sort((a,b) => a.dateKey.localeCompare(b.dateKey));
+  // Deduplicate RSRC multi-day events (show once at start date)
+  const seen = new Set();
+  const deduped = rsrcDates.filter(ev => {
+    if (seen.has(ev.id)) return false;
+    seen.add(ev.id);
+    return true;
+  });
+
+  return [...deduped, ...gcalDates].sort((a,b) => a.dateKey.localeCompare(b.dateKey));
 }
 
 // ── Calendar rendering ────────────────────────────────────────────────────
@@ -208,15 +254,21 @@ function renderCalendar() {
     if (events.length) {
       const dots = document.createElement('div');
       dots.className = 'event-dots';
+      const seen = new Set();
 
       events.slice(0, 3).forEach(ev => {
+        if (seen.has(ev.id)) return;
+        seen.add(ev.id);
+
         const isGcal = ev.source === 'google';
         const color  = isGcal ? '#4285f4' : (MEMBERS[ev.owner] || MEMBERS.master).color;
+        const isStart = ev.date === dateKey;
 
         if (ev.allDay) {
+          // Show label only on start date, just color bar on continuation days
           dots.innerHTML += `
             <div class="event-bar" style="background:${color}">
-              <span class="event-bar-label">${ev.title}</span>
+              <span class="event-bar-label">${isStart ? ev.title : '↔ ' + ev.title}</span>
             </div>`;
         } else {
           dots.innerHTML += `
@@ -258,17 +310,20 @@ function renderUpcoming() {
   }
 
   list.innerHTML = upcoming.slice(0, 8).map(ev => {
-    const isGcal   = ev.source === 'google';
-    const color    = isGcal ? '#4285f4' : (MEMBERS[ev.owner] || MEMBERS.master).color;
+    const isGcal    = ev.source === 'google';
+    const color     = isGcal ? '#4285f4' : (MEMBERS[ev.owner] || MEMBERS.master).color;
     const allDayTag = ev.allDay ? '<span style="font-size:11px;background:#edf5eb;color:#2a5c23;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px">All day</span>' : '';
     const gcalTag   = isGcal   ? '<span style="font-size:11px;background:#e8f0fe;color:#4285f4;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px">Google</span>' : '';
+    const dateRange = (ev.allDay && ev.endDate && ev.endDate !== ev.date)
+      ? `${formatDate(ev.dateKey)} – ${formatDate(ev.endDate)}`
+      : formatDate(ev.dateKey);
 
     return `
       <div class="upcoming-card">
         <div style="width:3px;border-radius:2px;background:${color};align-self:stretch;flex-shrink:0"></div>
         <div style="flex:1;min-width:0">
           <div class="upcoming-title">${ev.title}${allDayTag}${gcalTag}</div>
-          <div class="upcoming-meta">${formatDate(ev.dateKey)}${ev.startTime ? ' · ' + ev.startTime : ''}${ev.location ? ' · ' + ev.location : ''}</div>
+          <div class="upcoming-meta">${dateRange}${ev.startTime ? ' · ' + ev.startTime : ''}${ev.location ? ' · ' + ev.location : ''}</div>
         </div>
         ${isGcal ? '<span style="font-size:18px">📅</span>' : memberAvatar(ev.owner || 'master', 7)}
       </div>`;
@@ -288,11 +343,18 @@ function openDayModal(dateKey, day, month) {
   if (!events.length) {
     list.innerHTML = '<p style="font-size:13px;color:#bbb">No events this day.</p>';
   } else {
+    const seen = new Set();
     list.innerHTML = events.map(ev => {
-      const isGcal   = ev.source === 'google';
-      const color    = isGcal ? '#4285f4' : (MEMBERS[ev.owner] || MEMBERS.master).color;
+      if (seen.has(ev.id)) return '';
+      seen.add(ev.id);
+
+      const isGcal    = ev.source === 'google';
+      const color     = isGcal ? '#4285f4' : (MEMBERS[ev.owner] || MEMBERS.master).color;
       const allDayTag = ev.allDay ? '<span style="font-size:11px;background:#edf5eb;color:#2a5c23;padding:1px 6px;border-radius:3px;font-weight:600">All day</span>' : '';
       const gcalTag   = isGcal   ? '<span style="font-size:11px;background:#e8f0fe;color:#4285f4;padding:1px 6px;border-radius:3px;font-weight:600">Google Cal</span>' : '';
+      const dateRange = (ev.allDay && ev.endDate && ev.endDate !== ev.date)
+        ? `${formatDate(ev.date)} – ${formatDate(ev.endDate)}`
+        : '';
 
       const actions = isGcal ? '' : `
         <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">
@@ -312,6 +374,7 @@ function openDayModal(dateKey, day, month) {
               <span class="day-event-title">${ev.title}</span>
               ${allDayTag}${gcalTag}
             </div>
+            ${dateRange ? `<div class="day-event-meta">${dateRange}</div>` : ''}
             ${ev.startTime ? `<div class="day-event-meta">${ev.startTime}${ev.endTime ? ' – ' + ev.endTime : ''}</div>` : ''}
             ${ev.location ? `<div class="day-event-meta">${ev.location}</div>` : ''}
             ${ev.description ? `<div class="day-event-meta" style="margin-top:4px">${ev.description}</div>` : ''}
@@ -336,6 +399,7 @@ function openCreateEventModal(dateKey) {
   document.getElementById('event-modal-title').textContent = 'New Event';
   document.getElementById('ev-title').value    = '';
   document.getElementById('ev-date').value     = dateKey || todayStr();
+  document.getElementById('ev-enddate').value  = '';
   document.getElementById('ev-start').value    = '';
   document.getElementById('ev-end').value      = '';
   document.getElementById('ev-location').value = '';
@@ -366,6 +430,7 @@ function openEditEventModal(eventId) {
   document.getElementById('event-modal-title').textContent = 'Edit Event';
   document.getElementById('ev-title').value    = ev.title || '';
   document.getElementById('ev-date').value     = ev.date  || '';
+  document.getElementById('ev-enddate').value  = ev.endDate || '';
   document.getElementById('ev-start').value    = ev.startTime || '';
   document.getElementById('ev-end').value      = ev.endTime   || '';
   document.getElementById('ev-location').value = ev.location  || '';
@@ -385,7 +450,8 @@ function openEditEventModal(eventId) {
 
 function toggleAllDay() {
   const isAllDay = document.getElementById('ev-allday').checked;
-  document.getElementById('ev-time-fields').style.display = isAllDay ? 'none' : 'grid';
+  document.getElementById('ev-time-fields').style.display  = isAllDay ? 'none' : 'grid';
+  document.getElementById('ev-enddate-row').style.display  = isAllDay ? 'block' : 'none';
 }
 
 function saveEvent() {
@@ -393,10 +459,17 @@ function saveEvent() {
   const date  = document.getElementById('ev-date').value;
   if (!title || !date) { showToast('Title and date are required.', 'error'); return; }
 
-  const allDay = document.getElementById('ev-allday').checked;
+  const allDay  = document.getElementById('ev-allday').checked;
+  const endDate = document.getElementById('ev-enddate').value || null;
+
+  // Validate end date is not before start date
+  if (allDay && endDate && endDate < date) {
+    showToast('End date cannot be before start date.', 'error'); return;
+  }
+
   const eventData = {
-    title, date,
-    allDay,
+    title, date, allDay,
+    endDate:     allDay ? (endDate || null) : null,
     startTime:   allDay ? null : (document.getElementById('ev-start').value || null),
     endTime:     allDay ? null : (document.getElementById('ev-end').value   || null),
     location:    document.getElementById('ev-location').value.trim() || null,
